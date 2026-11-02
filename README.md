@@ -9,7 +9,7 @@
 
 # Logs:
 
-- Logs: Dự Án Bị Tạm Dừng (4/10/2026 - 20/10/2026)
+- Logs Alpha 1 - 6 (28/9 - 4/10/2026)
 
 - Logs Alpha 7 (20/10/2026):
 
@@ -26,6 +26,8 @@
 - Use MNHR-engine Online in [MNHR-Engine Online](https://quangthienlyoi-ux.github.io/MNHR-Engine/)
 
 (Note: Thực sụ có người làm Game Engine 2D in BIG 2026? Kệ đi, dù sao thì đây là 1 tác phẩm được tạo ra để Châm Biếm các Game Engine 3D AAA)
+
+- À mà nếu mọi người gặp lỗi vật lý ở Auto-Dedect-PNG Per-Frame bị lỗi thì mọi người đừng supprot nhé, Đấy không phải lỗi, đấy là tính năng đấy. (Joke) 
 
 ---
 [Copyright 2026 (c) Meonehero]
