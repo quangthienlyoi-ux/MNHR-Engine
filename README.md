@@ -19,7 +19,9 @@
 
 - Logs Alpha 8.0 (28/10/2026)
 
-- Logs Alpha 8.5 (Dự kiến ngày 3/11/2026)
+- Logs Alpha 8.5 (28/10/2026)
+
+- Logs Alpha 8.7 (3/11/2026)
 
 ---
 
