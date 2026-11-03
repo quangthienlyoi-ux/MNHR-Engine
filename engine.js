@@ -1,5 +1,5 @@
 /* ============================================================
-   MNHR-engine — engine.js Alpha 8
+   MNHR-engine — engine.js Alpha 8.7
    Auto-detect đa frame + Hệ thống Biến (Events)
    ============================================================ */
 window.MNHR = (function () {
@@ -54,30 +54,31 @@ function MiniRuntime() {
     return (it.hitboxes && it.hitboxes.length) ? cleanList(it.hitboxes) : null;
   }
   function faceOf(it) { return it.kind === 'sprite' && it._facing < 0 ? -1 : 1; }
+  function scOf(it) { return (it.kind === 'sprite' && it._scaleBuff && it._scaleBuff.mult > 0) ? it._scaleBuff.mult : 1; }
   function getHitboxes(it) {
     const L = hbList(it);
     if (!L) return [getBounds(it)];
-    const fx = faceOf(it);
-    return L.map(h => ({ x: it.x + h.ox * fx - h.w / 2, y: it.y + h.oy - h.h / 2, w: h.w, h: h.h }));
+    const fx = faceOf(it), sc = scOf(it);
+    return L.map(h => ({ x: it.x + h.ox * fx * sc - h.w * sc / 2, y: it.y + h.oy * sc - h.h * sc / 2, w: h.w * sc, h: h.h * sc }));
   }
   function getBounds(it) {
-    const fx = faceOf(it);
+    const fx = faceOf(it), sc = scOf(it);
     const L = hbList(it);
     if (L) {
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const h of L) {
-        const x1 = it.x + h.ox * fx - h.w / 2, y1 = it.y + h.oy - h.h / 2;
+        const x1 = it.x + h.ox * fx * sc - h.w * sc / 2, y1 = it.y + h.oy * sc - h.h * sc / 2;
         if (x1 < minX) minX = x1;
         if (y1 < minY) minY = y1;
-        if (x1 + h.w > maxX) maxX = x1 + h.w;
-        if (y1 + h.h > maxY) maxY = y1 + h.h;
+        if (x1 + h.w * sc > maxX) maxX = x1 + h.w * sc;
+        if (y1 + h.h * sc > maxY) maxY = y1 + h.h * sc;
       }
       return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
     }
     if (it.kind === 'sprite' && it.hb) {
-      return { x: it.x + it.hb.ox * fx - it.hb.hw, y: it.y + it.hb.oy - it.hb.hh, w: it.hb.hw * 2, h: it.hb.hh * 2 };
+      return { x: it.x + it.hb.ox * fx * sc - it.hb.hw * sc, y: it.y + it.hb.oy * sc - it.hb.hh * sc, w: it.hb.hw * 2 * sc, h: it.hb.hh * 2 * sc };
     }
-    return { x: it.x - it.w / 2, y: it.y - it.h / 2, w: it.w, h: it.h };
+    return { x: it.x - it.w * sc / 2, y: it.y - it.h * sc / 2, w: it.w * sc, h: it.h * sc };
   }
   function aabb(a, b) {
     return a.x < b.x + b.w && a.x + a.w > b.x &&
@@ -112,24 +113,44 @@ function MiniRuntime() {
     try { ctx.drawImage(img, ...a); return true; } catch (e) { return false; }
   }
   /* Hộp va chạm địa hình: KHÔNG phụ thuộc frame/animation → hết kẹt khi đổi frame (hitbox theo frame chỉ dùng cho sát thương/chạm) */
+  /* Gộp hitbox mọi frame của trạng thái hiện tại thành 1 hộp (ổn định khi sprite đổi kích thước mỗi frame) */
+  function stateUnion(it) {
+    const A = it.animations; if (!A) return null;
+    const an = A[it._state] || A.idle;
+    if (!an || !an.frames || !an.frames.length) return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const f of an.frames) {
+      if (!f.hitboxes || !f.hitboxes.length) continue;
+      for (const h of cleanList(f.hitboxes)) {
+        x0 = Math.min(x0, h.ox - h.w / 2); x1 = Math.max(x1, h.ox + h.w / 2);
+        y0 = Math.min(y0, h.oy - h.h / 2); y1 = Math.max(y1, h.oy + h.h / 2);
+      }
+    }
+    if (x0 === Infinity) return null;
+    return [{ ox: (x0 + x1) / 2, oy: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0 }];
+  }
+  /* it.hbMode: 'frame' = theo từng frame · 'state' = gộp theo trạng thái · 'single' = 1 hitbox mặc định */
   function bodyBoxes(it) {
     if (it.kind !== 'sprite') return getHitboxes(it);
-    const fx = faceOf(it);
-    let L = hbList(it);
+    const fx = faceOf(it), sc = scOf(it), mode = it.hbMode || 'frame';
     const def = (it.hitboxes && it.hitboxes.length) ? cleanList(it.hitboxes) : null;
     const area = (a) => a.reduce((t, h) => t + h.w * h.h, 0);
-    if (L && def && L !== def && area(L) < 0.3 * area(def)) L = def;   // hitbox frame bất thường (quá nhỏ) → dùng mặc định
+    let L = def;
+    if (mode === 'frame') {
+      L = hbList(it);
+      if (L && def && L !== def && area(L) < 0.3 * area(def)) L = def;   // hitbox frame bất thường (quá nhỏ) → dùng mặc định
+    } else if (mode === 'state') L = stateUnion(it) || def;
     if (L) {
-      let dy = 0;   // neo "chân": đáy hitbox frame trùng đáy hitbox mặc định → đổi frame không làm lún/nổi
+      let dy = 0;   // neo "chân": đáy hitbox trùng đáy hitbox mặc định → đổi frame/trạng thái không làm lún/nổi
       const bot = (a) => a.reduce((m, h) => Math.max(m, h.oy + h.h / 2), -Infinity);
       if (L !== def) {
         if (def) dy = bot(def) - bot(L);
         else if (it.hb) dy = (it.hb.oy + it.hb.hh) - bot(L);
       }
-      return L.map(h => ({ x: it.x + h.ox * fx - h.w / 2, y: it.y + h.oy + dy - h.h / 2, w: h.w, h: h.h }));
+      return L.map(h => ({ x: it.x + h.ox * fx * sc - h.w * sc / 2, y: it.y + (h.oy + dy) * sc - h.h * sc / 2, w: h.w * sc, h: h.h * sc }));
     }
-    if (it.hb) return [{ x: it.x + it.hb.ox * fx - it.hb.hw, y: it.y + it.hb.oy - it.hb.hh, w: it.hb.hw * 2, h: it.hb.hh * 2 }];
-    return [{ x: it.x - it.w / 2, y: it.y - it.h / 2, w: it.w, h: it.h }];
+    if (it.hb) return [{ x: it.x + it.hb.ox * fx * sc - it.hb.hw * sc, y: it.y + it.hb.oy * sc - it.hb.hh * sc, w: it.hb.hw * 2 * sc, h: it.hb.hh * 2 * sc }];
+    return [{ x: it.x - it.w * sc / 2, y: it.y - it.h * sc / 2, w: it.w * sc, h: it.h * sc }];
   }
   /* Đẩy nhân vật ra khỏi khối đặc theo trục nông nhất (lật hướng, đổi frame khối, spawn trong khối) */
   function depenetrate(state, it) {
@@ -624,10 +645,32 @@ function MiniRuntime() {
     }
   }
 
+  const AI_DEF = { chaseSpeed: 0.7, reaction: 0, attackRange: 0, attackCd: 0, aggression: 100, keepDist: 50,
+    fleeHp: 0, loseTime: 0, alertRadius: 0, patrolWait: 0, jumpChance: 0, turnOnWall: false, edgeSafe: false };
+  function aiOf(it) { const a = it.ai || {}, o = {}; for (const k in AI_DEF) o[k] = a[k] != null ? a[k] : AI_DEF[k]; return o; }
+  function groundAhead(state, it, dir) {
+    let x0 = Infinity, x1 = -Infinity, bot = -Infinity;
+    for (const b of bodyBoxes(it)) { x0 = Math.min(x0, b.x); x1 = Math.max(x1, b.x + b.w); bot = Math.max(bot, b.y + b.h); }
+    const px = dir > 0 ? x1 + 4 : x0 - 4, py = bot + 6;
+    for (const o of state.items) {
+      if (o.kind !== 'block' || !o.solid || o._dead) continue;
+      for (const h of getHitboxes(o)) if (px >= h.x && px <= h.x + h.w && py >= h.y && py <= h.y + h.h) return true;
+    }
+    return false;
+  }
+  function alertNearby(state, it, r) {
+    for (const o of state.items) {
+      if (o === it || o.kind !== 'sprite' || o.control !== 'bot' || o._dead) continue;
+      if (Math.abs(o.x - it.x) <= r && Math.abs(o.y - it.y) <= r) o._alertT = 3;
+    }
+  }
   function updateBotAI(state, it, dt) {
     if (it._patrolOrigin === undefined) { it._patrolOrigin = it.x; it._patrolDir = 1; }
+    const ai = aiOf(it);
     const range = it.botRange != null ? it.botRange : 150;
     const patrolRange = it.botPatrol != null ? it.botPatrol : 80;
+    const blocked = it._aiLastX !== undefined && Math.abs(it.x - it._aiLastX) < 0.05 && Math.abs(it._aiWant || 0) > 0.2 && it._onGround;
+    it._aiLastX = it.x;
     let target = null, minDist = Infinity;
     for (let i = 0; i < state.items.length; i++) {
       const o = state.items[i];
@@ -637,20 +680,51 @@ function MiniRuntime() {
       const d = Math.sqrt(dx*dx + dy*dy);
       if (d < minDist) { minDist = d; target = o; }
     }
-    if (target && minDist <= range) {
+    const seen = !!(target && minDist <= range);
+    if (seen) { it._loseT = ai.loseTime; if (ai.alertRadius > 0) alertNearby(state, it, ai.alertRadius); }
+    else if (it._loseT > 0) it._loseT -= dt;
+    if (it._alertT > 0) it._alertT -= dt;
+    const engaged = !!target && (seen || it._loseT > 0 || it._alertT > 0);
+    if (engaged && !it._engaged && ai.reaction > 0) it._reactT = ai.reaction;
+    it._engaged = engaged;
+    if (engaged) {
       it._facing = target.x > it.x ? 1 : -1;
-      if (it.shoot && it.shoot.enabled) tryShoot(state, it);
-      if (minDist > range * 0.65)      it._vx = it._facing * (BASE_SPEED * it.speed * 0.7);
-      else if (minDist < 50)           it._vx = -it._facing * (BASE_SPEED * it.speed * 0.5);
-      else                              it._vx = 0;
+      if (it._reactT > 0) { it._reactT -= dt; it._vx = 0; it._aiWant = 0; return; }
+      const hpPct = it.maxHp > 0 ? (it.hp / it.maxHp) * 100 : 100;
+      if (ai.fleeHp > 0 && hpPct < ai.fleeHp) {
+        it._facing = -it._facing;
+        it._vx = it._facing * (BASE_SPEED * it.speed * ai.chaseSpeed);
+      } else {
+        const atk = ai.attackRange > 0 ? ai.attackRange : range;
+        if (it.shoot && it.shoot.enabled && minDist <= atk && Math.random() * 100 < ai.aggression) {
+          const before = it._shootCd;
+          tryShoot(state, it);
+          if (!(before > 0) && ai.attackCd > 0) it._shootCd += ai.attackCd;
+        }
+        if (minDist > range * 0.65)      it._vx = it._facing * (BASE_SPEED * it.speed * ai.chaseSpeed);
+        else if (minDist < ai.keepDist)  it._vx = -it._facing * (BASE_SPEED * it.speed * 0.5);
+        else                              it._vx = 0;
+      }
     } else if (patrolRange <= 0) {
       it._vx = 0;   // phạm vi tuần = 0 → đứng yên (không tuần tra)
+    } else if (it._waitT > 0) {
+      it._waitT -= dt; it._vx = 0;
     } else {
-      if (it.x > it._patrolOrigin + patrolRange) it._patrolDir = -1;
-      if (it.x < it._patrolOrigin - patrolRange) it._patrolDir = 1;
+      if (it.x > it._patrolOrigin + patrolRange && it._patrolDir !== -1) { it._patrolDir = -1; it._waitT = ai.patrolWait; }
+      else if (it.x < it._patrolOrigin - patrolRange && it._patrolDir !== 1) { it._patrolDir = 1; it._waitT = ai.patrolWait; }
+      else if (ai.turnOnWall && blocked) { it._patrolDir = -it._patrolDir; it._waitT = ai.patrolWait; }
       it._facing = it._patrolDir;
-      it._vx = it._patrolDir * (BASE_SPEED * it.speed * 0.6);
+      it._vx = it._waitT > 0 ? 0 : it._patrolDir * (BASE_SPEED * it.speed * 0.6);
     }
+    if (ai.edgeSafe && it._onGround && it._vx !== 0 && !groundAhead(state, it, it._vx > 0 ? 1 : -1)) {
+      it._vx = 0;
+      if (!engaged) it._patrolDir = -it._patrolDir;
+    }
+    if (ai.jumpChance > 0 && blocked && it._onGround) {
+      it._aiJumpT = (it._aiJumpT || 0) - dt;
+      if (it._aiJumpT <= 0) { it._aiJumpT = 0.4; if (Math.random() * 100 < ai.jumpChance) it._vy = -BASE_JUMP * it.jumpPower; }
+    }
+    it._aiWant = it._vx;   // vận tốc bot MUỐN đi (để nhận biết bị chặn bởi tường)
   }
 
   function stepAnimation(it, dt) {
@@ -1217,7 +1291,7 @@ function MiniRuntime() {
     updateProjectiles, updateCamera,
     updateParticles, updateFloatingTexts, updateShake,
     render, drawUI, hitUIButton, spawnBullet, tryShoot,
-    fireEvent, executeAction, frameOf, initVars, bodyBoxes, respawnItem
+    fireEvent, executeAction, frameOf, initVars, bodyBoxes, respawnItem, AI_DEF
   };
 }
 
@@ -1394,7 +1468,8 @@ const State = {
   ui: RT.defaultUI(),
   uiSelected: null, uiDrag: null,
   showMenu: false, fullscreen: false, dirty: false,
-  varDefs: [], vars: {}
+  varDefs: [], vars: {},
+  res: { scale: 1, pixel: false }
 };
 
 function toast(msg, kind, ms) {
@@ -1998,7 +2073,7 @@ function makeSprite(o) {
       speed: 8, bulletW: 14, bulletH: 14,
       useGravity: false, bulletGravity: 5
     },
-    botRange: 150, botPatrol: 80, noPush: false,
+    botRange: 150, botPatrol: 80, noPush: false, hbMode: 'state', ai: {},
     speed: 1, jumpPower: 1, gravity: 1,
     hp: 92, maxHp: 92, iframe: 1,
     _vx: 0, _vy: 0, _onGround: false, _facing: 1,
@@ -2109,6 +2184,40 @@ function renderAnimFrames() {
 /* ============================================================
    LAYERS
    ============================================================ */
+const LayerDrag = { t: null, active: false, id: null, sx: 0, sy: 0, over: null, ended: 0 };
+function layerDragEnd(cancel) {
+  clearTimeout(LayerDrag.t); LayerDrag.t = null;
+  if (LayerDrag.active) {
+    document.querySelectorAll('#layers .layer-card').forEach(c => { c.style.opacity = ''; c.style.outline = ''; });
+    if (!cancel && LayerDrag.over && LayerDrag.over !== LayerDrag.id) moveLayer(LayerDrag.id, LayerDrag.over);
+    LayerDrag.ended = Date.now();
+  }
+  LayerDrag.active = false; LayerDrag.id = null; LayerDrag.over = null;
+}
+function moveLayer(id, targetId) {
+  const a = State.items.findIndex(i => i.id === id), b = State.items.findIndex(i => i.id === targetId);
+  if (a < 0 || b < 0) return;
+  const A = State.items[a], B = State.items[b];
+  if (A.kind !== B.kind) { toast('Khối luôn nằm dưới nhân vật/bot — chỉ đổi thứ tự trong cùng loại', 'err', 3500); return; }
+  State.items.splice(a, 1);
+  State.items.splice(State.items.findIndex(i => i.id === targetId) + 1, 0, A);   // ngay trên thẻ đích → đè lên thẻ đích
+  renderLayers(); scheduleSave();
+  toast('"' + A.name + '" đã đè lên "' + B.name + '"', 'ok');
+}
+function bindLayerDrag() {
+  window.addEventListener('pointermove', (e) => {
+    if (LayerDrag.t && Math.hypot(e.clientX - LayerDrag.sx, e.clientY - LayerDrag.sy) > 10) { clearTimeout(LayerDrag.t); LayerDrag.t = null; }
+    if (!LayerDrag.active) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const card = el && el.closest ? el.closest('#layers .layer-card') : null;
+    document.querySelectorAll('#layers .layer-card').forEach(c => { c.style.outline = ''; });
+    LayerDrag.over = null;
+    if (card && card.dataset.id !== LayerDrag.id) { card.style.outline = '2px solid #ffb86b'; LayerDrag.over = card.dataset.id; }
+  });
+  window.addEventListener('pointerup', () => layerDragEnd(false));
+  window.addEventListener('pointercancel', () => layerDragEnd(true));
+  window.addEventListener('touchmove', (e) => { if (LayerDrag.active && e.cancelable) e.preventDefault(); }, { passive: false });
+}
 function renderLayers() {
   const el = document.getElementById('layers');
   el.innerHTML = '';
@@ -2116,7 +2225,18 @@ function renderLayers() {
     const item = State.items[i];
     const card = document.createElement('div');
     card.className = 'layer-card' + (item.id === State.selectedId ? ' sel' : '');
-    card.onclick = () => { State.tab = 'scene'; selectItem(item.id); };
+    card.dataset.id = item.id;
+    card.onclick = () => { if (Date.now() - LayerDrag.ended < 350) return; State.tab = 'scene'; selectItem(item.id); };
+    card.addEventListener('pointerdown', (e) => {
+      if (e.target.classList && e.target.classList.contains('del')) return;
+      layerDragEnd(true);
+      LayerDrag.sx = e.clientX; LayerDrag.sy = e.clientY;
+      LayerDrag.t = setTimeout(() => {
+        LayerDrag.t = null; LayerDrag.active = true; LayerDrag.id = item.id; card.style.opacity = '.45';
+        try { if (navigator.vibrate) navigator.vibrate(15); } catch (_) {}
+        toast('Kéo tới thẻ muốn đè lên rồi thả', 'ok', 1800);
+      }, 450);
+    });
     const thumb = document.createElement('div');
     thumb.className = 'thumb';
 
@@ -2609,6 +2729,7 @@ function renderSpriteInspector(root, item) {
   root.appendChild(sg);
 
   root.appendChild(sectionHeader('Hitbox'));
+  root.appendChild(row('Hitbox va chạm khối', selectInput(item.hbMode || 'frame', [['frame', 'Theo từng frame'], ['state', 'Theo trạng thái'], ['single', 'Một hitbox (mặc định)']], v => { item.hbMode = v; scheduleSave(); })));
   root.appendChild(hitboxButton(item));
 
   root.appendChild(sectionHeader('Chuyển động & Camera'));
@@ -2630,6 +2751,23 @@ function renderSpriteInspector(root, item) {
     root.appendChild(sectionHeader('Bot AI'));
     root.appendChild(row('Tầm phát hiện', numInput(item.botRange, v => item.botRange = Math.max(20, v), 10, 20)));
     root.appendChild(row('Phạm vi tuần',  numInput(item.botPatrol, v => item.botPatrol = Math.max(10, v), 10, 10)));
+    if (!item.ai) item.ai = {};
+    const gv = (k) => item.ai[k] != null ? item.ai[k] : RT.AI_DEF[k];
+    const aiNum = (k, label, step, min) => root.appendChild(row(label, numInput(gv(k), v => { item.ai[k] = v; scheduleSave(); }, step, min)));
+    const aiChk = (k, label) => root.appendChild(row(label, checkbox(!!gv(k), v => { item.ai[k] = v; scheduleSave(); })));
+    aiNum('chaseSpeed', 'Tốc độ đuổi (x)', 0.1, 0.1);
+    aiNum('reaction', 'Độ trễ phản ứng (s)', 0.1, 0);
+    aiNum('attackRange', 'Tầm tấn công (0 = tầm nhìn)', 10, 0);
+    aiNum('attackCd', 'Hồi chiêu thêm (s)', 0.1, 0);
+    aiNum('aggression', 'Độ hung hăng (%)', 5, 0);
+    aiNum('keepDist', 'Giữ khoảng cách', 5, 0);
+    aiNum('fleeHp', 'Bỏ chạy khi HP dưới (%)', 5, 0);
+    aiNum('loseTime', 'Thời gian mất dấu (s)', 0.5, 0);
+    aiNum('alertRadius', 'Bán kính báo động', 20, 0);
+    aiNum('patrolWait', 'Chờ ở cuối đường (s)', 0.5, 0);
+    aiNum('jumpChance', 'Nhảy qua vật cản (%)', 5, 0);
+    aiChk('turnOnWall', 'Quay đầu khi gặp tường');
+    aiChk('edgeSafe', 'Tránh rơi khỏi mép');
   }
 
   root.appendChild(sectionHeader('Animation (frames)'));
@@ -3229,6 +3367,14 @@ function drawUIEditorOverlay() {
 /* ============================================================
    SERIALIZE / DESERIALIZE
    ============================================================ */
+function sanitizeAI(a) {
+  const o = {};
+  if (a && typeof a === 'object') for (const k in RT.AI_DEF) {
+    if (a[k] == null) continue;
+    o[k] = typeof RT.AI_DEF[k] === 'boolean' ? !!a[k] : (isFinite(+a[k]) ? +a[k] : RT.AI_DEF[k]);
+  }
+  return o;
+}
 function serializeAnim(anim) {
   if (!anim) return null;
   return {
@@ -3257,6 +3403,7 @@ function serialize() {
     varDefs: State.varDefs.map(d => ({ name: d.name, value: d.value })),
 
     vw: VW, vh: VH,
+    res: { scale: State.res.scale, pixel: !!State.res.pixel },
     ui: JSON.parse(JSON.stringify(State.ui)),
     items: State.items.map(it => {
       if (it.kind === 'sprite') {
@@ -3285,6 +3432,7 @@ function serialize() {
           botRange: it.botRange != null ? it.botRange : 150,
           botPatrol: it.botPatrol != null ? it.botPatrol : 80,
           noPush: !!it.noPush,
+          hbMode: it.hbMode || 'frame', ai: Object.assign({}, it.ai || {}),
           speed: it.speed, jumpPower: it.jumpPower, gravity: it.gravity,
           hp: it.hp, maxHp: it.maxHp, iframe: it.iframe
         };
@@ -3306,6 +3454,7 @@ function serialize() {
 }
 
 function deserialize(data) {
+  State.res = { scale: Math.max(1, Math.min(4, Math.round(+(data && data.res && data.res.scale) || 1))), pixel: !!(data && data.res && data.res.pixel) };
   State.varDefs = ((data && data.varDefs) || []).map(d => ({ name: String(d.name || ''), value: d.value != null ? String(d.value) : '0' }));
   State.items = [];
   State.selectedId = null;
@@ -3374,6 +3523,7 @@ function deserialize(data) {
         botRange: d.botRange != null ? d.botRange : 150,
         botPatrol: d.botPatrol != null ? d.botPatrol : 80,
         noPush: !!d.noPush,
+        hbMode: d.hbMode || 'frame', ai: sanitizeAI(d.ai),
         speed: d.speed, jumpPower: d.jumpPower, gravity: d.gravity,
         hp: d.hp, maxHp: d.maxHp || d.hp, iframe: d.iframe
       });
@@ -3509,7 +3659,7 @@ function cloneItem(it) {
       for (const a in v) c.animations[a] = Object.assign({}, v[a], { frames: v[a].frames.map(f => Object.assign({}, f, { hitboxes: (f.hitboxes || []).map(h => Object.assign({}, h)) })) });
     } else if (k === 'tex') {
       c.tex = {}; for (const t in v) c.tex[t] = v[t] ? Object.assign({}, v[t]) : v[t];
-    } else if (k === 'events' || k === 'hitboxes' || k === 'hb' || k === 'shoot') c[k] = JSON.parse(JSON.stringify(v));
+    } else if (k === 'events' || k === 'hitboxes' || k === 'hb' || k === 'shoot' || k === 'ai') c[k] = JSON.parse(JSON.stringify(v));
     else c[k] = v;
   }
   return c;
@@ -3595,7 +3745,7 @@ async function renderSettings() {
   const lines = [
     ['Dự án', meta ? meta.name : '-'], ['Nhân vật / Bot', st.sprites], ['Khối', st.blocks],
     ['Frame ảnh', st.frames + ' (~' + fmtSize(st.bytes) + ')'], ['Hitbox', st.hb], ['Sự kiện', st.events],
-    ['Dung lượng dự án', meta ? fmtSize(meta.size || 0) : '-'], ['Nơi lưu', Store.name()], ['Phiên bản', 'Alpha 8']
+    ['Dung lượng dự án', meta ? fmtSize(meta.size || 0) : '-'], ['Nơi lưu', Store.name()], ['Phiên bản', 'Alpha 8.7']
   ];
   try {
     if (navigator.storage && navigator.storage.estimate) {
@@ -3617,7 +3767,7 @@ async function renderSettings() {
 }
 function mnhrText() {
   const meta = Projects.meta(State.currentProjectId);
-  return JSON.stringify({ mnhr: 1, engine: 'Alpha 8', name: meta ? meta.name : 'Dự án', savedAt: Date.now(), data: serialize() });
+  return JSON.stringify({ mnhr: 1, engine: 'Alpha 8.7', name: meta ? meta.name : 'Dự án', savedAt: Date.now(), data: serialize() });
 }
 function downloadMnhr() {
   try {
@@ -3712,6 +3862,14 @@ function openProjectsModal() {
     };
     listEl.appendChild(r);
   }
+  const oldRb = document.getElementById('projResBox'); if (oldRb) oldRb.remove();
+  const rb = document.createElement('div'); rb.id = 'projResBox';
+  rb.style.cssText = 'margin-top:10px;padding-top:8px;border-top:1px dashed #262d3f;';
+  rb.appendChild(sectionHeader('Cài đặt dự án (khi xuất game)'));
+  rb.appendChild(row('Độ phân giải', selectInput(String(State.res.scale), [['1', '640x360 (1x)'], ['2', '1280x720 (2x)'], ['3', '1920x1080 (3x)'], ['4', '2560x1440 (4x)']], v => { State.res.scale = +v; scheduleSave(); })));
+  rb.appendChild(row('Pixel art (không làm mịn ảnh)', checkbox(!!State.res.pixel, v => { State.res.pixel = v; scheduleSave(); })));
+  const box = modal.querySelector('.modal-box');
+  box.insertBefore(rb, box.querySelector('.modal-actions'));
   modal.classList.add('show');
 }
 
@@ -3822,7 +3980,9 @@ const Exporter = (function () {
     L.push('function MF(f){return {url:f.url,img:null,hitboxes:(f.hitboxes||[]).map(function(h){return {ox:h.ox,oy:h.oy,w:h.w,h:h.h};})};}');
     L.push('var canvas = document.getElementById("c");');
     L.push('var ctx = canvas.getContext("2d");');
-    L.push('canvas.width = VW; canvas.height = VH;');
+    L.push('var RES = Math.max(1, Math.min(4, Math.round((data.res && data.res.scale) || 1)));');
+    L.push('canvas.width = VW*RES; canvas.height = VH*RES;');
+    L.push('if (data.res && data.res.pixel) canvas.style.imageRendering = "pixelated";');
     L.push('var imgCache = document.getElementById("imgCache");');
     L.push('function fit(){var s=Math.min(window.innerWidth/VW,window.innerHeight/VH);');
     L.push('canvas.style.width=Math.floor(VW*s)+"px";canvas.style.height=Math.floor(VH*s)+"px";}');
@@ -3876,6 +4036,7 @@ const Exporter = (function () {
     L.push('      botRange:d.botRange!=null?d.botRange:150,');
     L.push('      botPatrol:d.botPatrol!=null?d.botPatrol:80,');
     L.push('      noPush:!!d.noPush,');
+    L.push('      hbMode:d.hbMode||"frame", ai:d.ai||{},');
     L.push('      speed:d.speed, jumpPower:d.jumpPower, gravity:d.gravity,');
     L.push('      hp:d.hp, maxHp:d.maxHp||d.hp, iframe:d.iframe,');
     L.push('      _vx:0,_vy:0,_onGround:false,_facing:1,_state:"idle",_invuln:0,_dead:false,');
@@ -4010,6 +4171,7 @@ const Exporter = (function () {
     L.push('    RT.updateFloatingTexts(state, dt);');
     L.push('    RT.updateShake(state, dt);');
     L.push('  }');
+    L.push('  ctx.setTransform(RES,0,0,RES,0,0); ctx.imageSmoothingEnabled = !(data.res && data.res.pixel);');
     L.push('  RT.render(ctx, state, { editor: false });');
     L.push('  } catch(e){ if(!loop.err){ loop.err=1; console.error(e); } }');
     L.push('  requestAnimationFrame(loop);');
@@ -4242,6 +4404,7 @@ async function init() {
   };
 
   bindSettings();
+  bindLayerDrag();
   document.getElementById('btnProjects').onclick = openProjectsModal;
   document.getElementById('btnCloseProjects').onclick = () => document.getElementById('projectModal').classList.remove('show');
   document.getElementById('btnNewProject').onclick = async () => {
@@ -4353,7 +4516,7 @@ async function init() {
   await loadProject(meta);
   updateCamInfo();
   requestAnimationFrame(loop);
-  toast('MNHR-engine Alpha 8 · lưu trữ: ' + Store.name(), 'ok', 2800);
+  toast('MNHR-engine Alpha 8.7 · lưu trữ: ' + Store.name(), 'ok', 2800);
 }
 
 return {
